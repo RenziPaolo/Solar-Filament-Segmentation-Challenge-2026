@@ -1,0 +1,89 @@
+# `spine.py` — Detailed Explanation
+
+## What It Does
+
+`spine.py` generates **centerline/spine targets** for multi-task learning. Instead of only predicting a binary segmentation mask (filament vs. background), the model can simultaneously learn to predict the **filament's centerline** — the 1-pixel-wide skeleton running through the middle of each filament.
+
+## Why Centerline Targets Matter for Filaments
+
+Solar filaments are thin, elongated, and often have:
+- **Complex branching** patterns
+- **Variable thickness** along their length
+- **Touching/overlapping** segments that are hard to separate by pixels alone
+
+A centerline target provides an explicit **geometric prior**: it forces the model to learn the **topological skeleton** of each filament, not just the filled region. This is complementary to the clDice loss (which computes skeletons on-the-fly during training).
+
+## The Three Functions
+
+### 1. `centerlines_from_segmentations(segmentations, height, width, thickness=1)`
+
+Takes polygon/RLE segmentations and produces a centerline map:
+
+```python
+# For each filament polygon:
+mask = decode_polygon(seg, height, width)       # Filled binary mask
+skel = skeletonize(mask)                        # 1-pixel-wide centerline
+canvas = np.maximum(canvas, skel)               # Merge into output
+```
+
+**Key insight**: Uses `skimage.morphology.skeletonize` (exact algorithm), not the soft version used in clDice loss. This runs offline to generate targets, so differentiability isn't needed.
+
+### 2. `spine_from_annotations(annotations, height, width, thickness=1)`
+
+Uses **annotated spine endpoints** when available. The MAGFiLO dataset includes per-filament spine data (two endpoints defining the filament's central axis):
+
+```python
+for ann in annotations:
+    pts = ann.get("spine") or ann.get("point_coordinates")
+    if pts:
+        cv2.line(canvas, pt1, pt2, 1.0, thickness)
+```
+
+This gives **exact centerlines** from human annotation — a strong supervision signal.
+
+### 3. `soft_centerline_target(segmentations, height, width)`
+
+A union-based approach for **touching filaments**:
+
+```python
+union = np.zeros((h, w), dtype=bool)
+for seg in segmentations:
+    union |= decode_polygon(seg, height, width)  # Union of ALL filaments
+skel = skeletonize(union)                          # Single skeleton of the whole structure
+```
+
+Useful when multiple filaments in the same image touch or overlap — their combined skeleton preserves branching topology.
+
+## Integration with Training
+
+The workflow is:
+
+```
+Annotations (COCO JSON)
+       ↓
+soft_target() → binary mask target (existing)
+centerlines_from_segmentations() → centerline target (new)
+       ↓
+Multi-task model outputs: [mask_logits, centerline_logits]
+       ↓
+Loss = w1 * BCE_Dice(mask) + w2 * BCE_Dice(centerline)
+```
+
+## Design Decisions
+
+| Decision | Rationale |
+|---|---|
+| **skimage.skeletonize** (not soft) | Targets are pre-computed offline; exact algorithm is fine |
+| **3 separate functions** | Each serves a different use case: polygon-only, annotated spine, or touching filaments |
+| **`thickness` parameter** | Dilates the centerline to `2*thickness - 1` pixels — helps gradient flow for very thin structures |
+| **`try/except` import** | Gracefully degrades if scikit-image isn't installed (falls back to binary mask) |
+| **Yann Z. bug fix** | Fixed `tuple(int(round(float(v)) for v in pts[0]))` → `tuple(int(round(float(v))) for v in pts[0])` (generator was passed to `int()` instead of elements) |
+
+## When to Use It
+
+| Scenario | Approach |
+|---|---|
+| **Spine endpoints annotated** | `spine_from_annotations()` — exact ground truth |
+| **Only polygons available** | `centerlines_from_segmentations()` — skeletonized from masks |
+| **Filaments touching/overlapping** | `soft_centerline_target()` — union skeleton preserves topology |
+| **Very thin filaments** | Increase `thickness` (e.g., 2-3 pixels) for better gradient signal |

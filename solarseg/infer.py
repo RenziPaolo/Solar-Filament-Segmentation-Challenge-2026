@@ -20,7 +20,11 @@ def get_device(name: str = "auto") -> torch.device:
 def load_checkpoint(path: str | Path, device: torch.device):
     ckpt = torch.load(path, map_location=device, weights_only=False)
     cfg = ckpt.get("config", {})
-    model = build_model(base=cfg.get("base", 32), depth=cfg.get("depth", 4)).to(device)
+    model = build_model(
+        base=cfg.get("base", 32),
+        depth=cfg.get("depth", 4),
+        encoder=cfg.get("encoder", "unet"),
+    ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, cfg

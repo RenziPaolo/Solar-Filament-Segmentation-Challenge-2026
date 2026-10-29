@@ -35,7 +35,7 @@ from solarseg.data import (  # noqa: E402
 )
 from solarseg.dataset import CropDataset  # noqa: E402
 from solarseg.infer import get_device, predict_prob  # noqa: E402
-from solarseg.losses import BCEDiceLoss  # noqa: E402
+from solarseg.losses import BCEDiceLoss, BCECLDiceLoss, BCEDiceCLDiceLoss  # noqa: E402
 from solarseg.model import build_model, count_parameters  # noqa: E402
 
 
@@ -50,8 +50,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--base", type=int, default=32, help="U-Net width")
+    p.add_argument("--base", type=int, default=32, help="model width (32=unet, 48=convnext)")
     p.add_argument("--depth", type=int, default=4, help="U-Net downsampling steps")
+    p.add_argument("--encoder", default="unet", choices=["unet", "convnext"],
+                   help="backbone: from-scratch U-Net or ConvNeXt-tiny encoder")
+    p.add_argument("--loss", default="bce_dice", choices=["bce_dice", "bce_cldice", "bce_dice_cldice"],
+                   help="loss: BCE+Dice, BCE+clDice, or BCE+Dice+clDice")
     p.add_argument("--pos-weight", type=float, default=3.0, help="BCE weight on filament pixels")
     p.add_argument("--pos-frac", type=float, default=0.7, help="share of crops centered on a filament")
     p.add_argument("--val-frac", type=float, default=0.15)
@@ -122,13 +126,18 @@ def main() -> None:
     val_x, val_y = load_stems(val_stems, groups, args.scale, "val") if val_stems else ([], [])
 
     config = {k: v for k, v in vars(args).items()}
-    model = build_model(base=args.base, depth=args.depth).to(device)
+    model = build_model(base=args.base, depth=args.depth, encoder=args.encoder).to(device)
     print(f"model parameters: {count_parameters(model):,}")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     total_steps = args.epochs * args.steps_per_epoch
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=total_steps, pct_start=0.1)
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
-    loss_fn = BCEDiceLoss(pos_weight=args.pos_weight).to(device)
+    if args.loss == "bce_cldice":
+        loss_fn = BCECLDiceLoss(pos_weight=args.pos_weight).to(device)
+    elif args.loss == "bce_dice_cldice":
+        loss_fn = BCEDiceCLDiceLoss(pos_weight=args.pos_weight).to(device)
+    else:
+        loss_fn = BCEDiceLoss(pos_weight=args.pos_weight).to(device)
 
     ds = CropDataset(
         train_x,

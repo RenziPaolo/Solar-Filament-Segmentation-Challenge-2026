@@ -17,6 +17,7 @@ from solarseg.data import list_images, resolve_paths  # noqa: E402
 from solarseg.infer import get_device, load_checkpoint, predict_image  # noqa: E402
 from solarseg.postprocess import PostConfig, instances_from_prob  # noqa: E402
 from solarseg.rle import labels_to_counts, write_submission  # noqa: E402
+from tqdm import tqdm  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,7 +55,7 @@ def main() -> None:
         images = images[: args.limit]
 
     rows, empty, t0 = [], [], time.time()
-    for i, path in enumerate(images, 1):
+    for i, path in enumerate(pbar := tqdm(images, desc="predicting", unit="img"), 1):
         prob, disk = predict_image(
             model, path, device, cfg.get("scale", 0.5),
             tile=cfg.get("tile", 512), overlap=cfg.get("overlap", 128), tta=args.tta,
@@ -64,8 +65,7 @@ def main() -> None:
             empty.append(path.stem)
         # the id is the image file name without its extension, then a running number
         rows.extend((f"{path.stem}_{k}", c) for k, c in enumerate(counts, 1))
-        if i % 20 == 0 or i == len(images):
-            print(f"  {i}/{len(images)} images, {len(rows)} filaments ({time.time() - t0:.0f}s)", flush=True)
+        pbar.set_postfix(found=len(rows), t=f"{time.time() - t0:.0f}s")
 
     if not rows:
         sys.exit("No filaments predicted at all; check the threshold before submitting.")

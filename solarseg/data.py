@@ -16,7 +16,9 @@ import json
 import os
 import random
 import re
+import sys
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -266,8 +268,27 @@ def soft_target(records: list[Record]) -> np.ndarray:
     return acc / max(len(records), 1)
 
 
+@contextmanager
+def _suppress_jpeg_warnings():
+    """Temporarily redirect stderr to suppress OpenCV's 'Premature end of JPEG' warnings.
+
+    Some GONG JPEGs in the dataset are slightly truncated; OpenCV prints a warning to
+    stderr but still reads the image correctly.  This hides the noise.
+    """
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stderr = os.dup(2)
+    os.dup2(devnull, 2)
+    try:
+        yield
+    finally:
+        os.dup2(old_stderr, 2)
+        os.close(devnull)
+        os.close(old_stderr)
+
+
 def read_image(path: str | os.PathLike) -> np.ndarray:
-    img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    with _suppress_jpeg_warnings():
+        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise OSError(f"Could not read image {path}")
     return img

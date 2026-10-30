@@ -32,7 +32,7 @@ IMAGE_SIZE = 2048  # every competition frame is 2048 x 2048
 STEM_RE = re.compile(r"(\d{14}[A-Za-z]h)")
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
 ANNOTATOR_KEYS = ("annotator", "annotator_id", "annotator_name", "labeler", "rater", "user_id")
-DEFAULT_SEARCH_ROOTS = (Path("/kaggle/input"), Path("data"))
+DEFAULT_SEARCH_ROOTS = (Path("/kaggle/input"), Path("data"), Path("../data"))
 
 
 @dataclass
@@ -54,7 +54,8 @@ def find_data_root(explicit: str | os.PathLike | None = None) -> Path:
     """Locate the folder that contains ``train/`` and ``test/``.
 
     Order: ``--data-root`` argument, ``SOLARSEG_DATA`` environment variable, then a
-    search under ``/kaggle/input`` and ``./data``.
+    search under ``/kaggle/input`` and ``./data`` (and ``../data``), plus an upward
+    tree walk from the repository root as a last resort.
     """
     if explicit:
         return Path(explicit)
@@ -66,10 +67,30 @@ def find_data_root(explicit: str | os.PathLike | None = None) -> Path:
             hit = _first_dir(base, "train_images")
             if hit is not None:
                 return hit.parent.parent
+    upward = _search_upward_for_data(Path(__file__).resolve())
+    if upward is not None:
+        return upward
     raise FileNotFoundError(
         "Could not find the competition data. Attach the competition to your Kaggle "
         "notebook, or pass --data-root /path/to/MAGFiLO_1.0_Kaggle_2026"
     )
+
+
+def _search_upward_for_data(start: Path) -> Path | None:
+    """Walk up the directory tree looking for a ``data/`` folder with the competition layout."""
+    cur = start
+    for _ in range(10):
+        candidate = cur / "data"
+        if candidate.is_dir() and (
+            _first_dir(candidate, "train_images") is not None
+            or (candidate / "annotations.json").exists()
+        ):
+            return candidate
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    return None
 
 
 def find_annotation_file(root: Path) -> Path:

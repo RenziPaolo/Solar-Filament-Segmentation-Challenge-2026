@@ -130,7 +130,15 @@ def main() -> None:
     print(f"model parameters: {count_parameters(model):,}")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     total_steps = args.epochs * args.steps_per_epoch
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=args.lr, total_steps=total_steps, pct_start=0.1)
+    # OneCycleLR's warmup phase spans (pct_start * total_steps - 1) steps and must not
+    # collapse to zero width, which crashes with ZeroDivisionError on small smoke-test
+    # configs (e.g. the documented --epochs 2 --steps-per-epoch 5 -> total_steps=10).
+    # Keep the intended 10% warmup when possible; otherwise widen pct_start just enough
+    # to stay well-formed. This is a no-op for any realistic total_steps >= ~20.
+    pct_start = max(0.1, 2.0 / total_steps)
+    sched = torch.optim.lr_scheduler.OneCycleLR(
+        opt, max_lr=args.lr, total_steps=total_steps, pct_start=pct_start
+    )
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     if args.loss == "bce_cldice":
         loss_fn = BCECLDiceLoss(pos_weight=args.pos_weight).to(device)
